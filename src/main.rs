@@ -20,6 +20,9 @@ struct StatusInput {
     cost: Option<Cost>,
     #[serde(default)]
     context_window: Option<ContextWindow>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    exceeds_200k_tokens: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -40,12 +43,18 @@ struct Cost {
     total_cost_usd: Option<f64>,
     #[serde(default)]
     total_duration_ms: Option<u64>,
+    #[serde(default)]
+    total_lines_added: Option<u64>,
+    #[serde(default)]
+    total_lines_removed: Option<u64>,
 }
 
 #[derive(Deserialize)]
 struct ContextWindow {
     #[serde(default)]
     used_percentage: Option<f64>,
+    #[serde(default)]
+    context_window_size: Option<u64>,
 }
 
 // ── Git info via gix (pure Rust, no OpenSSL) ─────────────────────────
@@ -108,6 +117,19 @@ fn dir_name(path: &str) -> &str {
         .unwrap_or(path)
 }
 
+fn render_drift(workspace: Option<&Workspace>) -> Option<String> {
+    let ws = workspace?;
+    let project_dir = ws.project_dir.as_deref()?;
+    let current_dir = ws.current_dir.as_str();
+
+    if current_dir == project_dir {
+        return None;
+    }
+
+    let project_name = dir_name(project_dir);
+    Some(format!(" {YELLOW}⚠️ ↩ {project_name}{RESET}"))
+}
+
 fn render_line1(input: &StatusInput, git: Option<&GitInfo>) -> String {
     let model = &input.model.display_name;
     let dir = input
@@ -117,6 +139,10 @@ fn render_line1(input: &StatusInput, git: Option<&GitInfo>) -> String {
         .unwrap_or("?");
 
     let mut line = format!("{CYAN}[{model}]{RESET} 📁 {dir}");
+
+    if let Some(drift) = render_drift(input.workspace.as_ref()) {
+        line.push_str(&drift);
+    }
 
     if let Some(g) = git {
         line.push_str(&format!(" | 🌿 {}", g.branch));
@@ -147,30 +173,72 @@ fn render_context_bar(pct: u8) -> String {
     format!("{color}{bar}{RESET} {pct}%")
 }
 
+fn format_context_size(size: Option<u64>) -> &'static str {
+    match size {
+        Some(s) if s >= 1_000_000 => "1M",
+        Some(s) if s >= 200_000 => "200k",
+        Some(_) => "?k",
+        None => "",
+    }
+}
+
+fn compact_nudge(pct: u8) -> &'static str {
+    if pct >= 70 && pct < 85 {
+        " ⚡ compact soon"
+    } else {
+        ""
+    }
+}
+
 fn render_line2(input: &StatusInput) -> String {
-    let pct = input
-        .context_window
-        .as_ref()
-        .and_then(|c| c.used_percentage)
-        .unwrap_or(0.0) as u8;
+    let ctx = input.context_window.as_ref();
+    let pct = ctx.and_then(|c| c.used_percentage).unwrap_or(0.0) as u8;
 
     let bar = render_context_bar(pct);
 
-    let cost = input
-        .cost
-        .as_ref()
-        .and_then(|c| c.total_cost_usd)
-        .unwrap_or(0.0);
+    // Context window size indicator
+    let size_label = format_context_size(ctx.and_then(|c| c.context_window_size));
+    let size_str = if size_label.is_empty() {
+        String::new()
+    } else {
+        format!(" ({size_label})")
+    };
 
-    let duration_ms = input
-        .cost
-        .as_ref()
-        .and_then(|c| c.total_duration_ms)
-        .unwrap_or(0);
+    // Compaction nudge in the 70-84% zone
+    let nudge = compact_nudge(pct);
+    let nudge_str = if nudge.is_empty() {
+        String::new()
+    } else {
+        format!("{YELLOW}{nudge}{RESET}")
+    };
+
+    let cost_data = input.cost.as_ref();
+    let cost = cost_data.and_then(|c| c.total_cost_usd).unwrap_or(0.0);
+
+    let duration_ms = cost_data.and_then(|c| c.total_duration_ms).unwrap_or(0);
     let mins = duration_ms / 60_000;
     let secs = (duration_ms % 60_000) / 1_000;
 
-    format!("{bar} | {YELLOW}${cost:.2}{RESET} | ⏱️ {mins}m {secs}s")
+    let mut line = format!(
+        "{bar}{size_str}{nudge_str} | {YELLOW}${cost:.2}{RESET} | ⏱️ {mins}m {secs}s"
+    );
+
+    // Lines added/removed
+    let added = cost_data.and_then(|c| c.total_lines_added).unwrap_or(0);
+    let removed = cost_data.and_then(|c| c.total_lines_removed).unwrap_or(0);
+    if added > 0 || removed > 0 {
+        line.push_str(&format!(
+            " | {GREEN}+{added}{RESET} {RED}-{removed}{RESET}"
+        ));
+
+        // Lines per dollar (only when cost is meaningful)
+        if cost > 0.001 {
+            let loc_per_dollar = ((added + removed) as f64 / cost).round() as u64;
+            line.push_str(&format!(" {CYAN}({loc_per_dollar} loc/$){RESET}"));
+        }
+    }
+
+    line
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
@@ -202,3 +270,4 @@ fn main() {
         println!("[starline]");
     }
 }
+// staged change
