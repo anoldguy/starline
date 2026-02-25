@@ -14,6 +14,38 @@ Displays model, working directory, git branch, context window usage, session cos
 Line 1: model, directory, git status.
 Line 2: context window, cost, time, lines changed, and how many lines of code you got per dollar (the number that haunts you).
 
+## Status Elements
+
+### Line 1: Identity and Location
+
+`[model]` is the display name from Claude Code, rendered as received. No mapping, no aliasing. Whatever Anthropic decides to call the next model, that's what you'll see.
+
+`📁 dir` shows the final path component of your current working directory. If you're in `/home/you/projects/api`, you see `api`. When `current_dir` and `project_dir` diverge, a drift warning appears: `⚠️ ↩ project_name`, showing the project root you've wandered from. This is easy to miss in a long session and surprisingly useful when you do.
+
+`🌿 branch` is read directly from the local git repo via `gix`. Named branches display as you'd expect. A detached HEAD shows the first seven characters of the commit hash. If the directory isn't a git repo, the entire git section is quietly omitted.
+
+The counters after the branch name reflect working tree state:
+
+- `+N` (green): staged files, ready to commit
+- `~N` (yellow): modified but unstaged files
+- `!N` (red): files with merge conflicts
+
+Each counter only appears when its value is greater than zero. No news is good news; merge conflicts are the exception that proves the rule.
+
+### Line 2: Resources and Efficiency
+
+The context bar is a 10-character gauge of your context window consumption. Filled blocks represent `used_percentage / 10`, truncated to an integer. The bar color shifts with usage: green below 70%, yellow from 70% to 89%, red at 90% and above. When the window size is known, it appears in parentheses, bucketed to `200k`, `1M`, or the raw value in thousands.
+
+Between 70% and 84%, a `⚡ compact soon` nudge appears. It disappears at 85%, not because the problem went away, but because nagging you at that point would be redundant.
+
+`$cost` is `total_cost_usd` formatted to two decimal places. Always visible, even at zero, because the meter is running whether you look at it or not.
+
+`⏱️ Xm Ys` is session duration derived from `total_duration_ms`. Minutes and seconds. If your session runs long enough to need an hours field, that's a you problem, not a starline problem.
+
+`+added -removed` shows total lines changed across the session. Green for additions, red for removals. Hidden until at least one line has been touched, so a fresh session doesn't open with a wall of zeroes judging you.
+
+`(N loc/$)` is the efficiency metric: total lines changed divided by total cost, rounded to the nearest integer. It requires both meaningful line changes and a cost above $0.001 to avoid dividing by dust. The number is descriptive, not prescriptive; some of your most expensive sessions will be the most valuable, and vice versa.
+
 ## Installation
 
 Download the latest binary for your platform from [Releases](https://github.com/anoldguy/starline/releases/latest):
@@ -44,7 +76,10 @@ Add to your `~/.claude/settings.json`:
 
 ```json
 {
-  "statusCommand": "starline"
+  "statusLine": {
+    "type": "command",
+    "command": "starline"
+  }
 }
 ```
 
