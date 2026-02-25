@@ -219,17 +219,14 @@ fn render_line2(input: &StatusInput) -> String {
     let mins = duration_ms / 60_000;
     let secs = (duration_ms % 60_000) / 1_000;
 
-    let mut line = format!(
-        "{bar}{size_str}{nudge_str} | {YELLOW}${cost:.2}{RESET} | ⏱️ {mins}m {secs}s"
-    );
+    let mut line =
+        format!("{bar}{size_str}{nudge_str} | {YELLOW}${cost:.2}{RESET} | ⏱️ {mins}m {secs}s");
 
     // Lines added/removed
     let added = cost_data.and_then(|c| c.total_lines_added).unwrap_or(0);
     let removed = cost_data.and_then(|c| c.total_lines_removed).unwrap_or(0);
     if added > 0 || removed > 0 {
-        line.push_str(&format!(
-            " | {GREEN}+{added}{RESET} {RED}-{removed}{RESET}"
-        ));
+        line.push_str(&format!(" | {GREEN}+{added}{RESET} {RED}-{removed}{RESET}"));
 
         // Lines per dollar (only when cost is meaningful)
         if cost > 0.001 {
