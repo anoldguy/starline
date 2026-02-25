@@ -33,7 +33,7 @@ struct Model {
 #[derive(Deserialize)]
 struct Workspace {
     current_dir: String,
-    #[allow(dead_code)]
+    // Used in render_drift to detect directory drift from project root.
     project_dir: Option<String>,
 }
 
@@ -63,9 +63,12 @@ struct GitInfo {
     branch: String,
     staged: u32,
     modified: u32,
+    conflicts: u32,
 }
 
 fn git_info(cwd: &str) -> Option<GitInfo> {
+    // .ok()? converts Err to None, silently dropping git info when the
+    // directory is not inside a repository or discovery otherwise fails.
     let repo = gix::discover(cwd).ok()?;
 
     // Branch name (or short hash if detached)
@@ -77,9 +80,10 @@ fn git_info(cwd: &str) -> Option<GitInfo> {
         }
     };
 
-    // Staged + modified counts via gix status
+    // Staged + modified + conflict counts via gix status
     let mut staged = 0u32;
     let mut modified = 0u32;
+    let mut conflicts = 0u32;
 
     let status_iter = repo
         .status(gix::progress::Discard)
@@ -93,7 +97,12 @@ fn git_info(cwd: &str) -> Option<GitInfo> {
             gix::status::Item::TreeIndex(_) => staged += 1,
             gix::status::Item::IndexWorktree(change) => {
                 use gix::status::index_worktree::Item as IW;
+                use gix::status::plumbing::index_as_worktree::EntryStatus;
                 match change {
+                    IW::Modification {
+                        status: EntryStatus::Conflict { .. },
+                        ..
+                    } => conflicts += 1,
                     IW::Modification { .. } | IW::Rewrite { .. } => modified += 1,
                     _ => {}
                 }
@@ -105,6 +114,7 @@ fn git_info(cwd: &str) -> Option<GitInfo> {
         branch,
         staged,
         modified,
+        conflicts,
     })
 }
 
@@ -152,6 +162,9 @@ fn render_line1(input: &StatusInput, git: Option<&GitInfo>) -> String {
         if g.modified > 0 {
             line.push_str(&format!(" {YELLOW}~{}{RESET}", g.modified));
         }
+        if g.conflicts > 0 {
+            line.push_str(&format!(" {RED}!{}{RESET}", g.conflicts));
+        }
     }
 
     line
@@ -173,17 +186,18 @@ fn render_context_bar(pct: u8) -> String {
     format!("{color}{bar}{RESET} {pct}%")
 }
 
-fn format_context_size(size: Option<u64>) -> &'static str {
+fn format_context_size(size: Option<u64>) -> String {
     match size {
-        Some(s) if s >= 1_000_000 => "1M",
-        Some(s) if s >= 200_000 => "200k",
-        Some(_) => "?k",
-        None => "",
+        Some(s) if s >= 1_000_000 => "1M".to_string(),
+        Some(s) if s >= 200_000 => "200k".to_string(),
+        // Divide by 1000 so any context window size renders meaningfully.
+        Some(s) => format!("{}k", s / 1_000),
+        None => String::new(),
     }
 }
 
 fn compact_nudge(pct: u8) -> &'static str {
-    if pct >= 70 && pct < 85 {
+    if (70..85).contains(&pct) {
         " ⚡ compact soon"
     } else {
         ""
@@ -261,7 +275,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() {
-    if let Err(_) = run() {
+    if let Err(e) = run() {
+        // Log to stderr — invisible to the Claude Code status bar protocol.
+        eprintln!("[starline] error: {e}");
         // Never exit non-zero — that blanks the status bar.
         // Print a safe fallback instead.
         println!("[starline]");
