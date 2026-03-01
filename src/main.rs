@@ -20,6 +20,8 @@ struct StatusInput {
     cost: Option<Cost>,
     #[serde(default)]
     context_window: Option<ContextWindow>,
+    // Kept for forward-compatibility with the Claude Code JSON protocol.
+    // The field is present in the input schema but not yet used by starline.
     #[allow(dead_code)]
     #[serde(default)]
     exceeds_200k_tokens: Option<bool>,
@@ -188,10 +190,9 @@ fn render_context_bar(pct: u8) -> String {
 
 fn format_context_size(size: Option<u64>) -> String {
     match size {
-        Some(s) if s >= 1_000_000 => "1M".to_string(),
-        Some(s) if s >= 200_000 => "200k".to_string(),
-        // Divide by 1000 so any context window size renders meaningfully.
-        Some(s) => format!("{}k", s / 1_000),
+        Some(s) if s >= 1_000_000 => format!("{}M", s / 1_000_000),
+        Some(s) if s >= 1_000 => format!("{}k", s / 1_000),
+        Some(s) => format!("{}", s),
         None => String::new(),
     }
 }
@@ -279,7 +280,178 @@ fn main() {
         // Log to stderr — invisible to the Claude Code status bar protocol.
         eprintln!("[starline] error: {e}");
         // Never exit non-zero — that blanks the status bar.
-        // Print a safe fallback instead.
+        // Print two lines — Claude Code expects exactly two lines of output.
         println!("[starline]");
+        println!();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── render_context_bar ──────────────────────────────────────────
+
+    #[test]
+    fn context_bar_empty() {
+        let bar = render_context_bar(0);
+        assert!(bar.contains("░░░░░░░░░░"));
+        assert!(bar.contains("0%"));
+    }
+
+    #[test]
+    fn context_bar_partial() {
+        let bar = render_context_bar(50);
+        assert!(bar.contains("█████░░░░░"));
+        assert!(bar.contains("50%"));
+    }
+
+    #[test]
+    fn context_bar_full() {
+        let bar = render_context_bar(100);
+        assert!(bar.contains("██████████"));
+        assert!(bar.contains("100%"));
+    }
+
+    #[test]
+    fn context_bar_color_green_below_70() {
+        let bar = render_context_bar(69);
+        assert!(bar.starts_with(GREEN));
+    }
+
+    #[test]
+    fn context_bar_color_yellow_at_70() {
+        let bar = render_context_bar(70);
+        assert!(bar.starts_with(YELLOW));
+    }
+
+    #[test]
+    fn context_bar_color_red_at_90() {
+        let bar = render_context_bar(90);
+        assert!(bar.starts_with(RED));
+    }
+
+    // ── format_context_size ─────────────────────────────────────────
+
+    #[test]
+    fn context_size_none() {
+        assert_eq!(format_context_size(None), "");
+    }
+
+    #[test]
+    fn context_size_sub_1k() {
+        assert_eq!(format_context_size(Some(500)), "500");
+    }
+
+    #[test]
+    fn context_size_thousands() {
+        assert_eq!(format_context_size(Some(128_000)), "128k");
+    }
+
+    #[test]
+    fn context_size_200k() {
+        assert_eq!(format_context_size(Some(200_000)), "200k");
+    }
+
+    #[test]
+    fn context_size_500k() {
+        assert_eq!(format_context_size(Some(500_000)), "500k");
+    }
+
+    #[test]
+    fn context_size_1m() {
+        assert_eq!(format_context_size(Some(1_000_000)), "1M");
+    }
+
+    #[test]
+    fn context_size_2m() {
+        assert_eq!(format_context_size(Some(2_000_000)), "2M");
+    }
+
+    // ── compact_nudge ───────────────────────────────────────────────
+
+    #[test]
+    fn nudge_below_threshold() {
+        assert_eq!(compact_nudge(69), "");
+    }
+
+    #[test]
+    fn nudge_at_70() {
+        assert_eq!(compact_nudge(70), " ⚡ compact soon");
+    }
+
+    #[test]
+    fn nudge_at_84() {
+        assert_eq!(compact_nudge(84), " ⚡ compact soon");
+    }
+
+    #[test]
+    fn nudge_above_85() {
+        assert_eq!(compact_nudge(85), "");
+    }
+
+    #[test]
+    fn nudge_at_100() {
+        assert_eq!(compact_nudge(100), "");
+    }
+
+    // ── dir_name ────────────────────────────────────────────────────
+
+    #[test]
+    fn dir_name_simple() {
+        assert_eq!(dir_name("/home/user/project"), "project");
+    }
+
+    #[test]
+    fn dir_name_nested() {
+        assert_eq!(dir_name("/a/b/c/d"), "d");
+    }
+
+    #[test]
+    fn dir_name_root() {
+        // Path::file_name returns None for "/", so we fall back to the input.
+        assert_eq!(dir_name("/"), "/");
+    }
+
+    #[test]
+    fn dir_name_trailing_slash() {
+        // Path::file_name handles trailing slashes by ignoring them.
+        assert_eq!(dir_name("/home/user/project/"), "project");
+    }
+
+    // ── render_drift ────────────────────────────────────────────────
+
+    #[test]
+    fn drift_none_when_no_workspace() {
+        assert!(render_drift(None).is_none());
+    }
+
+    #[test]
+    fn drift_none_when_same_dir() {
+        let ws = Workspace {
+            current_dir: "/home/user/project".to_string(),
+            project_dir: Some("/home/user/project".to_string()),
+        };
+        assert!(render_drift(Some(&ws)).is_none());
+    }
+
+    #[test]
+    fn drift_none_when_no_project_dir() {
+        let ws = Workspace {
+            current_dir: "/home/user/project".to_string(),
+            project_dir: None,
+        };
+        assert!(render_drift(Some(&ws)).is_none());
+    }
+
+    #[test]
+    fn drift_shows_project_name_when_dirs_differ() {
+        let ws = Workspace {
+            current_dir: "/home/user/project/subdir".to_string(),
+            project_dir: Some("/home/user/project".to_string()),
+        };
+        let drift = render_drift(Some(&ws)).unwrap();
+        assert!(drift.contains("project"));
+        assert!(drift.contains("↩"));
     }
 }
