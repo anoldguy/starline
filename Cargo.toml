@@ -1,6 +1,6 @@
 [package]
 name = "starline"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
 description = "A fast Rust status line for Claude Code"
 repository = "https://github.com/anoldguy/starline"
