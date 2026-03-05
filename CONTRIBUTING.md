@@ -12,7 +12,7 @@ Open an issue. Describe what you want to change and why. This exists so we can a
 
 Branch off main, make your change, open a PR that references the issue. Keep it small. The entire project is one file; a PR that touches more than that file is probably doing too much.
 
-If you're adding behavior, add a JSON example in the PR description that demonstrates it. There's no test suite (see: single hobby binary), so the review doubles as QA.
+If you're adding behavior, add a JSON example in the PR description that demonstrates it and add tests to cover the new behavior.
 
 ## Code Style
 

@@ -38,7 +38,7 @@ Single file: `src/main.rs`. No modules, no lib crate.
 - **All fields from Claude Code are `Option` with `#[serde(default)]`** — the JSON contract is loose, fields may be null or absent.
 - **`run()` returns `Result`, `main()` catches errors** — never exit non-zero, that blanks the status bar. Print a fallback instead.
 - **Pure rendering functions** — `render_line1`, `render_line2` take `&StatusInput` and return `String`. Easy to test, easy to extend.
-- **Git via `gix` with `default-features = false`** — no OpenSSL, no HTTP transport. Pure Rust, cross-compiles cleanly.
+- **Git via subprocess** — shells out to `git rev-parse` and `git status --porcelain`. No shell invocation; arguments are passed directly via `Command::new("git").args(...)`. Requires `git` on `PATH`.
 - **ANSI colors as `const &str`** — no color library. Keep it simple.
 
 ## Adding new status fields

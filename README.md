@@ -2,7 +2,7 @@
 
 A Claude Code status line written in Rust, because the default one left too much money on the table without telling you about it.
 
-Displays model, working directory, git branch, context window usage, session cost, and a passive judgment of your loc-per-dollar efficiency. Single binary, no runtime dependencies, zero OpenSSL.
+Displays model, working directory, git branch, context window usage, session cost, and a passive judgment of your loc-per-dollar efficiency. Single binary, minimal dependencies. Requires `git` on `PATH`.
 
 ## What It Looks Like
 
@@ -22,7 +22,7 @@ Line 2: context window, cost, time, lines changed, and how many lines of code yo
 
 `📁 dir` shows the final path component of your current working directory. If you're in `/home/you/projects/api`, you see `api`. When `current_dir` and `project_dir` diverge, a drift warning appears: `⚠️ ↩ project_name`, showing the project root you've wandered from. This is easy to miss in a long session and surprisingly useful when you do.
 
-`🌿 branch` is read directly from the local git repo via `gix`. Named branches display as you'd expect. A detached HEAD shows the first seven characters of the commit hash. If the directory isn't a git repo, the entire git section is quietly omitted.
+`🌿 branch` is read from the local git repo via `git rev-parse` and `git status`. Named branches display as you'd expect. A detached HEAD shows the short commit hash. If the directory isn't a git repo (or `git` isn't installed), the entire git section is quietly omitted.
 
 The counters after the branch name reflect working tree state:
 

@@ -59,7 +59,7 @@ struct ContextWindow {
     context_window_size: Option<u64>,
 }
 
-// ── Git info via gix (pure Rust, no OpenSSL) ─────────────────────────
+// ── Git info via subprocess ──────────────────────────────────────────
 
 struct GitInfo {
     branch: String,
@@ -69,45 +69,58 @@ struct GitInfo {
 }
 
 fn git_info(cwd: &str) -> Option<GitInfo> {
-    // .ok()? converts Err to None, silently dropping git info when the
-    // directory is not inside a repository or discovery otherwise fails.
-    let repo = gix::discover(cwd).ok()?;
+    use std::process::Command;
 
-    // Branch name (or short hash if detached)
-    let branch = match repo.head_name().ok()? {
-        Some(name) => name.shorten().to_string(),
-        None => {
-            let id = repo.head_id().ok()?;
-            format!("{:.7}", id)
-        }
+    let branch_out = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(cwd)
+        .output()
+        .ok()?;
+    if !branch_out.status.success() {
+        return None;
+    }
+    let branch = String::from_utf8_lossy(&branch_out.stdout).trim().to_string();
+
+    // Detached HEAD returns "HEAD" — fall back to short hash
+    let branch = if branch == "HEAD" {
+        let hash_out = Command::new("git")
+            .args(["rev-parse", "--short", "HEAD"])
+            .current_dir(cwd)
+            .output()
+            .ok()?;
+        String::from_utf8_lossy(&hash_out.stdout).trim().to_string()
+    } else {
+        branch
     };
 
-    // Staged + modified + conflict counts via gix status
+    let status_out = Command::new("git")
+        .args(["status", "--porcelain=v1"])
+        .current_dir(cwd)
+        .output()
+        .ok()?;
+
     let mut staged = 0u32;
     let mut modified = 0u32;
     let mut conflicts = 0u32;
 
-    let status_iter = repo
-        .status(gix::progress::Discard)
-        .ok()?
-        .into_iter(std::iter::empty::<gix::bstr::BString>())
-        .ok()?;
+    for line in String::from_utf8_lossy(&status_out.stdout).lines() {
+        let bytes = line.as_bytes();
+        if bytes.len() < 2 {
+            continue;
+        }
+        let (x, y) = (bytes[0], bytes[1]);
 
-    for item in status_iter {
-        let Ok(item) = item else { continue };
-        match item {
-            gix::status::Item::TreeIndex(_) => staged += 1,
-            gix::status::Item::IndexWorktree(change) => {
-                use gix::status::index_worktree::Item as IW;
-                use gix::status::plumbing::index_as_worktree::EntryStatus;
-                match change {
-                    IW::Modification {
-                        status: EntryStatus::Conflict { .. },
-                        ..
-                    } => conflicts += 1,
-                    IW::Modification { .. } | IW::Rewrite { .. } => modified += 1,
-                    _ => {}
-                }
+        // Conflict markers: UU, AA, DD, AU, UA, DU, UD
+        if matches!((x, y),
+            (b'U', _) | (_, b'U') | (b'A', b'A') | (b'D', b'D')
+        ) {
+            conflicts += 1;
+        } else {
+            if x != b' ' && x != b'?' {
+                staged += 1;
+            }
+            if y != b' ' && y != b'?' {
+                modified += 1;
             }
         }
     }
@@ -264,8 +277,8 @@ fn print_usage() {
          Usage: pipe JSON into starline per\n\
          https://code.claude.com/docs/en/statusline\n\
          \n\
-         Commands:\n  \
-         update    Update starline to the latest version"
+         Install/update:\n  \
+         https://github.com/anoldguy/starline/releases"
     );
 }
 
@@ -303,47 +316,9 @@ fn wants_version() -> bool {
         .any(|a| a == "--version" || a == "-V" || a == "version")
 }
 
-fn wants_update() -> bool {
-    std::env::args().nth(1).as_deref() == Some("update")
-}
-
-fn run_update() -> Result<(), Box<dyn std::error::Error>> {
-    eprintln!("Checking for updates...");
-
-    let mut updater = axoupdater::AxoUpdater::new_for("starline");
-    updater.set_current_version(VERSION.parse()?)?;
-
-    if updater.load_receipt().is_err() {
-        eprintln!(
-            "starline was not installed via an official installer.\n\
-             Update manually or reinstall from:\n  \
-             https://github.com/anoldguy/starline/releases"
-        );
-        return Ok(());
-    }
-
-    if updater.is_update_needed_sync()? {
-        eprintln!("Updating starline...");
-        updater.run_sync()?;
-        eprintln!("Updated successfully!");
-    } else {
-        eprintln!("Already on the latest version (v{VERSION}).");
-    }
-
-    Ok(())
-}
-
 fn main() {
     if wants_version() {
         eprintln!("starline v{VERSION}");
-        return;
-    }
-
-    if wants_update() {
-        if let Err(e) = run_update() {
-            eprintln!("[starline] update error: {e}");
-            std::process::exit(1);
-        }
         return;
     }
 
