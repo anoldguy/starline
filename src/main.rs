@@ -261,8 +261,11 @@ fn print_usage() {
     eprintln!(
         "starline v{VERSION} — a fast Rust status line for Claude Code\n\
          \n\
-         Starline has no options, just pipe JSON into it per\n\
-         https://code.claude.com/docs/en/statusline"
+         Usage: pipe JSON into starline per\n\
+         https://code.claude.com/docs/en/statusline\n\
+         \n\
+         Commands:\n  \
+         update    Update starline to the latest version"
     );
 }
 
@@ -300,9 +303,47 @@ fn wants_version() -> bool {
         .any(|a| a == "--version" || a == "-V" || a == "version")
 }
 
+fn wants_update() -> bool {
+    std::env::args().nth(1).as_deref() == Some("update")
+}
+
+fn run_update() -> Result<(), Box<dyn std::error::Error>> {
+    eprintln!("Checking for updates...");
+
+    let mut updater = axoupdater::AxoUpdater::new_for("starline");
+    updater.set_current_version(VERSION.parse()?)?;
+
+    if updater.load_receipt().is_err() {
+        eprintln!(
+            "starline was not installed via an official installer.\n\
+             Update manually or reinstall from:\n  \
+             https://github.com/anoldguy/starline/releases"
+        );
+        return Ok(());
+    }
+
+    if updater.is_update_needed_sync()? {
+        eprintln!("Updating starline...");
+        updater.run_sync()?;
+        eprintln!("Updated successfully!");
+    } else {
+        eprintln!("Already on the latest version (v{VERSION}).");
+    }
+
+    Ok(())
+}
+
 fn main() {
     if wants_version() {
         eprintln!("starline v{VERSION}");
+        return;
+    }
+
+    if wants_update() {
+        if let Err(e) = run_update() {
+            eprintln!("[starline] update error: {e}");
+            std::process::exit(1);
+        }
         return;
     }
 
