@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use std::io::Read as _;
+use std::io::{IsTerminal, Read as _};
 use std::path::Path;
 
 // ── ANSI colors ──────────────────────────────────────────────────────
@@ -253,6 +253,18 @@ fn render_line2(input: &StatusInput) -> String {
     line
 }
 
+// ── Usage ─────────────────────────────────────────────────────────────
+
+const USAGE: &str = "\
+starline — a fast Rust status line for Claude Code
+
+Starline has no options, just pipe JSON into it per
+https://code.claude.com/docs/en/statusline";
+
+fn print_usage() {
+    eprintln!("{USAGE}");
+}
+
 // ── Main ─────────────────────────────────────────────────────────────
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -275,7 +287,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn wants_help() -> bool {
+    std::env::args()
+        .skip(1)
+        .any(|a| a == "--help" || a == "-h" || a == "help")
+}
+
 fn main() {
+    if wants_help() || std::io::stdin().is_terminal() {
+        print_usage();
+        return;
+    }
+
     if let Err(e) = run() {
         // Log to stderr — invisible to the Claude Code status bar protocol.
         eprintln!("[starline] error: {e}");
