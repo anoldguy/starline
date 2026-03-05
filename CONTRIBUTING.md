@@ -25,3 +25,23 @@ Rendering improvements, new status fields from the Claude Code JSON protocol, be
 ## What's Not in Scope
 
 Config files, feature flags, plugin systems, or anything that requires reading from disk at runtime. It reads stdin, it writes stdout, it exits. That's the product.
+
+## Releases
+
+Releases use [cargo-release](https://github.com/crate-ci/cargo-release) to bump `Cargo.toml`, commit, tag, and push in one step:
+
+```bash
+cargo install cargo-release
+
+# Dry run (preview what will happen)
+cargo release patch
+
+# Ship it
+cargo release patch --execute    # 0.2.0 -> 0.2.1
+cargo release minor --execute    # 0.2.0 -> 0.3.0
+cargo release major --execute    # 0.2.0 -> 1.0.0
+```
+
+Configuration lives in `release.toml`. Publishing to crates.io is disabled since distribution is via cargo-dist.
+
+GitHub Actions builds binaries for multiple targets, generates checksums and an installer script, and creates a release with all artifacts. This happens automatically when you push a version tag matching `v[0-9]+.[0-9]+.[0-9]+*`.

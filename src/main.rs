@@ -255,14 +255,15 @@ fn render_line2(input: &StatusInput) -> String {
 
 // ── Usage ─────────────────────────────────────────────────────────────
 
-const USAGE: &str = "\
-starline — a fast Rust status line for Claude Code
-
-Starline has no options, just pipe JSON into it per
-https://code.claude.com/docs/en/statusline";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn print_usage() {
-    eprintln!("{USAGE}");
+    eprintln!(
+        "starline v{VERSION} — a fast Rust status line for Claude Code\n\
+         \n\
+         Starline has no options, just pipe JSON into it per\n\
+         https://code.claude.com/docs/en/statusline"
+    );
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
@@ -293,7 +294,18 @@ fn wants_help() -> bool {
         .any(|a| a == "--help" || a == "-h" || a == "help")
 }
 
+fn wants_version() -> bool {
+    std::env::args()
+        .skip(1)
+        .any(|a| a == "--version" || a == "-V" || a == "version")
+}
+
 fn main() {
+    if wants_version() {
+        eprintln!("starline v{VERSION}");
+        return;
+    }
+
     if wants_help() || std::io::stdin().is_terminal() {
         print_usage();
         return;
