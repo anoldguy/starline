@@ -72,7 +72,7 @@ fn git_info(cwd: &str) -> Option<GitInfo> {
     use std::process::Command;
 
     let branch_out = Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .args(["--no-optional-locks", "rev-parse", "--abbrev-ref", "HEAD"])
         .current_dir(cwd)
         .output()
         .ok()?;
@@ -84,7 +84,7 @@ fn git_info(cwd: &str) -> Option<GitInfo> {
     // Detached HEAD returns "HEAD" — fall back to short hash
     let branch = if branch == "HEAD" {
         let hash_out = Command::new("git")
-            .args(["rev-parse", "--short", "HEAD"])
+            .args(["--no-optional-locks", "rev-parse", "--short", "HEAD"])
             .current_dir(cwd)
             .output()
             .ok()?;
@@ -94,16 +94,28 @@ fn git_info(cwd: &str) -> Option<GitInfo> {
     };
 
     let status_out = Command::new("git")
-        .args(["status", "--porcelain=v1"])
+        .args(["--no-optional-locks", "status", "--porcelain=v1", "-uno"])
         .current_dir(cwd)
         .output()
         .ok()?;
 
+    let (staged, modified, conflicts) =
+        parse_porcelain(&String::from_utf8_lossy(&status_out.stdout));
+
+    Some(GitInfo {
+        branch,
+        staged,
+        modified,
+        conflicts,
+    })
+}
+
+fn parse_porcelain(output: &str) -> (u32, u32, u32) {
     let mut staged = 0u32;
     let mut modified = 0u32;
     let mut conflicts = 0u32;
 
-    for line in String::from_utf8_lossy(&status_out.stdout).lines() {
+    for line in output.lines() {
         let bytes = line.as_bytes();
         if bytes.len() < 2 {
             continue;
@@ -111,7 +123,8 @@ fn git_info(cwd: &str) -> Option<GitInfo> {
         let (x, y) = (bytes[0], bytes[1]);
 
         // Conflict markers: UU, AA, DD, AU, UA, DU, UD
-        if matches!((x, y),
+        if matches!(
+            (x, y),
             (b'U', _) | (_, b'U') | (b'A', b'A') | (b'D', b'D')
         ) {
             conflicts += 1;
@@ -125,12 +138,7 @@ fn git_info(cwd: &str) -> Option<GitInfo> {
         }
     }
 
-    Some(GitInfo {
-        branch,
-        staged,
-        modified,
-        conflicts,
-    })
+    (staged, modified, conflicts)
 }
 
 // ── Rendering ────────────────────────────────────────────────────────
@@ -211,7 +219,7 @@ fn format_context_size(size: Option<u64>) -> String {
 }
 
 fn compact_nudge(pct: u8) -> &'static str {
-    if (70..85).contains(&pct) {
+    if (70..90).contains(&pct) {
         " ⚡ compact soon"
     } else {
         ""
@@ -437,8 +445,13 @@ mod tests {
     }
 
     #[test]
-    fn nudge_above_85() {
-        assert_eq!(compact_nudge(85), "");
+    fn nudge_at_89() {
+        assert_eq!(compact_nudge(89), " ⚡ compact soon");
+    }
+
+    #[test]
+    fn nudge_above_90() {
+        assert_eq!(compact_nudge(90), "");
     }
 
     #[test]
@@ -504,5 +517,230 @@ mod tests {
         let drift = render_drift(Some(&ws)).unwrap();
         assert!(drift.contains("project"));
         assert!(drift.contains("↩"));
+    }
+
+    // ── parse_porcelain ────────────────────────────────────────────
+
+    #[test]
+    fn porcelain_empty() {
+        assert_eq!(parse_porcelain(""), (0, 0, 0));
+    }
+
+    #[test]
+    fn porcelain_staged_files() {
+        let output = "A  new_file.rs\nM  changed.rs\n";
+        assert_eq!(parse_porcelain(output), (2, 0, 0));
+    }
+
+    #[test]
+    fn porcelain_modified_files() {
+        let output = " M unstaged.rs\n M another.rs\n";
+        assert_eq!(parse_porcelain(output), (0, 2, 0));
+    }
+
+    #[test]
+    fn porcelain_mixed() {
+        let output = "M  staged.rs\n M unstaged.rs\nMM both.rs\n";
+        assert_eq!(parse_porcelain(output), (2, 2, 0));
+    }
+
+    #[test]
+    fn porcelain_conflicts() {
+        let output = "UU conflicted.rs\nAA both_added.rs\nDD both_deleted.rs\n";
+        assert_eq!(parse_porcelain(output), (0, 0, 3));
+    }
+
+    #[test]
+    fn porcelain_all_types() {
+        let output = "A  added.rs\n M modified.rs\nUU conflict.rs\n";
+        assert_eq!(parse_porcelain(output), (1, 1, 1));
+    }
+
+    // ── render_line1 ───────────────────────────────────────────────
+
+    fn make_input(
+        workspace: Option<Workspace>,
+        cost: Option<Cost>,
+        context_window: Option<ContextWindow>,
+    ) -> StatusInput {
+        StatusInput {
+            model: Model {
+                display_name: "Opus".to_string(),
+            },
+            workspace,
+            cost,
+            context_window,
+            exceeds_200k_tokens: None,
+        }
+    }
+
+    #[test]
+    fn line1_model_and_dir() {
+        let input = make_input(
+            Some(Workspace {
+                current_dir: "/home/user/myproject".to_string(),
+                project_dir: None,
+            }),
+            None,
+            None,
+        );
+        let line = render_line1(&input, None);
+        assert!(line.contains("Opus"));
+        assert!(line.contains("myproject"));
+    }
+
+    #[test]
+    fn line1_no_workspace() {
+        let input = make_input(None, None, None);
+        let line = render_line1(&input, None);
+        assert!(line.contains("?"));
+    }
+
+    #[test]
+    fn line1_with_git() {
+        let input = make_input(
+            Some(Workspace {
+                current_dir: "/home/user/proj".to_string(),
+                project_dir: None,
+            }),
+            None,
+            None,
+        );
+        let git = GitInfo {
+            branch: "main".to_string(),
+            staged: 2,
+            modified: 1,
+            conflicts: 0,
+        };
+        let line = render_line1(&input, Some(&git));
+        assert!(line.contains("main"));
+        assert!(line.contains("+2"));
+        assert!(line.contains("~1"));
+        assert!(!line.contains("!"));
+    }
+
+    #[test]
+    fn line1_with_conflicts() {
+        let input = make_input(
+            Some(Workspace {
+                current_dir: "/proj".to_string(),
+                project_dir: None,
+            }),
+            None,
+            None,
+        );
+        let git = GitInfo {
+            branch: "feat".to_string(),
+            staged: 0,
+            modified: 0,
+            conflicts: 3,
+        };
+        let line = render_line1(&input, Some(&git));
+        assert!(line.contains("!3"));
+    }
+
+    #[test]
+    fn line1_with_drift() {
+        let input = make_input(
+            Some(Workspace {
+                current_dir: "/home/user/project/subdir".to_string(),
+                project_dir: Some("/home/user/project".to_string()),
+            }),
+            None,
+            None,
+        );
+        let line = render_line1(&input, None);
+        assert!(line.contains("subdir"));
+        assert!(line.contains("↩"));
+        assert!(line.contains("project"));
+    }
+
+    // ── render_line2 ───────────────────────────────────────────────
+
+    #[test]
+    fn line2_defaults() {
+        let input = make_input(None, None, None);
+        let line = render_line2(&input);
+        assert!(line.contains("0%"));
+        assert!(line.contains("$0.00"));
+        assert!(line.contains("0m 0s"));
+    }
+
+    #[test]
+    fn line2_with_cost_and_duration() {
+        let input = make_input(
+            None,
+            Some(Cost {
+                total_cost_usd: Some(1.5),
+                total_duration_ms: Some(125_000),
+                total_lines_added: None,
+                total_lines_removed: None,
+            }),
+            None,
+        );
+        let line = render_line2(&input);
+        assert!(line.contains("$1.50"));
+        assert!(line.contains("2m 5s"));
+    }
+
+    #[test]
+    fn line2_with_lines_and_loc_per_dollar() {
+        let input = make_input(
+            None,
+            Some(Cost {
+                total_cost_usd: Some(2.0),
+                total_duration_ms: Some(0),
+                total_lines_added: Some(100),
+                total_lines_removed: Some(50),
+            }),
+            None,
+        );
+        let line = render_line2(&input);
+        assert!(line.contains("+100"));
+        assert!(line.contains("-50"));
+        assert!(line.contains("75 loc/$"));
+    }
+
+    #[test]
+    fn line2_context_window_size() {
+        let input = make_input(
+            None,
+            None,
+            Some(ContextWindow {
+                used_percentage: Some(45.0),
+                context_window_size: Some(200_000),
+            }),
+        );
+        let line = render_line2(&input);
+        assert!(line.contains("45%"));
+        assert!(line.contains("(200k)"));
+    }
+
+    #[test]
+    fn line2_nudge_at_75() {
+        let input = make_input(
+            None,
+            None,
+            Some(ContextWindow {
+                used_percentage: Some(75.0),
+                context_window_size: None,
+            }),
+        );
+        let line = render_line2(&input);
+        assert!(line.contains("compact soon"));
+    }
+
+    #[test]
+    fn line2_no_nudge_at_95() {
+        let input = make_input(
+            None,
+            None,
+            Some(ContextWindow {
+                used_percentage: Some(95.0),
+                context_window_size: None,
+            }),
+        );
+        let line = render_line2(&input);
+        assert!(!line.contains("compact soon"));
     }
 }
